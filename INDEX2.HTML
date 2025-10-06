@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Smart Boarding — Demo (fixed)</title>
+
+  <!-- QR generator and html2canvas for downloads -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
+  <style>
+    :root{
+      --bg:#f3f6fb; --card:#fff; --accent:#0b74ff; --muted:#667085;
+      font-family: Inter, Roboto, Arial, sans-serif;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);padding:26px;color:#0b1220}
+    .wrap{max-width:1100px;margin:0 auto;display:grid;grid-template-columns:360px 1fr;gap:18px;align-items:start}
+    .card{background:var(--card);border-radius:12px;padding:16px;box-shadow:0 6px 18px rgba(12,20,40,0.06)}
+    h1{margin:0 0 8px;font-size:18px}
+    .muted{color:var(--muted);font-size:13px}
+    label{display:block;margin-top:10px;font-size:13px}
+    input{width:100%;padding:10px;border-radius:8px;border:1px solid #e6eef6;margin-top:6px}
+    button{padding:10px 12px;border-radius:8px;border:none;background:var(--accent);color:white;font-weight:600;cursor:pointer}
+    button.ghost{background:transparent;color:var(--accent);border:1px solid rgba(11,116,255,0.12)}
+    button.small{padding:8px 10px;font-size:13px}
+    .status{margin-top:12px;display:flex;gap:10px;align-items:center}
+    .loader{width:28px;height:28px;border-radius:50%;border:3px solid #e6eef6;border-top-color:var(--accent);animation:spin 1s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+
+    /* seat grid */
+    .seats{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-top:12px}
+    .seat{padding:10px;background:#f4f6fb;border-radius:8px;text-align:center;cursor:pointer;user-select:none}
+    .seat.taken{opacity:0.45;cursor:not-allowed;text-decoration:line-through}
+    .seat.selected{background:linear-gradient(90deg,var(--accent),#3aa0ff);color:white;font-weight:700}
+
+    /* Boarding pass area */
+    .right-col{display:flex;flex-direction:column;gap:12px}
+    .mini-pass{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:12px;border-radius:10px;background:#f7fbff;border:1px solid #e6f0ff}
+    .pass-meta{font-family:monospace;white-space:pre-line;color:#0b1220}
+    .qr-box{width:140px;height:140px;background:white;padding:6px;border-radius:10px;display:flex;align-items:center;justify-content:center}
+
+    /* "realistic" duplicate boarding pass (printable) */
+    .real-pass{margin-top:6px;padding:12px;border-radius:10px;background:white;border:1px solid #e6eef6;display:none}
+    .real-header{display:flex;align-items:center;justify-content:space-between;gap:12px}
+    .logo{font-weight:800;color:var(--accent);font-size:20px}
+    .real-grid{display:grid;grid-template-columns:1fr 180px;gap:12px;margin-top:10px;align-items:center}
+    .real-left{font-family:monospace;font-size:14px;color:#111}
+    .barcode{background:#fff;padding:6px;border-radius:6px;display:flex;align-items:center;justify-content:center}
+
+    .controls{display:flex;gap:8px;margin-top:12px}
+    .small{font-size:13px;color:var(--muted)}
+
+    /* responsive */
+    @media (max-width:980px){
+      .wrap{grid-template-columns:1fr; padding:12px}
+      .qr-box{width:110px;height:110px}
+      .real-grid{grid-template-columns:1fr 140px}
+    }
+
+    /* print styles */
+    @media print {
+      body{background:white}
+      .controls, .muted, #verifyBtn, #resetBtn { display:none !important; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="wrap">
+  <!-- LEFT: Check-in -->
+  <div class="card">
+    <h1>Smart Digital Boarding — Demo</h1>
+    <div class="muted">Enter ticket + name. Verification is simulated (4s). Then pick seat and generate boarding passes.</div>
+
+    <label>Ticket Number</label>
+    <input id="ticket" placeholder="12345-EX" />
+
+    <label>Passenger Name</label>
+    <input id="name" placeholder="Aditya Raj" />
+
+    <div style="display:flex;gap:10px;margin-top:12px">
+      <button id="verifyBtn">Check-in & Verify</button>
+      <button id="resetBtn" class="ghost small">Reset</button>
+    </div>
+
+    <div id="status" class="status" style="display:none">
+      <div class="loader" aria-hidden="true"></div>
+      <div id="statusText" class="small">Verifying documents...</div>
+    </div>
+
+    <div id="seatBox" style="margin-top:14px;display:none">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div><strong class="small">Choose preferred seat</strong></div>
+        <div class="small">Gate: <strong id="gate">5</strong></div>
+      </div>
+      <div class="seats" id="seatGrid" aria-label="Seat selection"></div>
+      <div style="margin-top:12px;display:flex;gap:8px">
+        <button id="generateBtn" disabled>Generate Boarding Pass</button>
+        <button id="clearSeat" class="ghost small">Clear</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: Display passes -->
+  <div class="right-col">
+    <div class="card mini-pass" id="miniPass" style="display:none">
+      <div style="flex:1">
+        <div style="font-weight:800">Smart Airways — Demo</div>
+        <div class="pass-meta" id="miniMeta" style="margin-top:8px"></div>
+      </div>
+      <div class="qr-box" id="miniQr" aria-hidden="true"></div>
+    </div>
+
+    <!-- realistic duplicate -->
+    <div class="card real-pass" id="realPass" aria-live="polite">
+      <div class="real-header">
+        <div class="logo">SMART ✈</div>
+        <div class="small">Boarding Pass — Demo Copy</div>
+      </div>
+
+      <div class="real-grid">
+        <div class="real-left" id="realMeta">
+          <!-- filled by JS -->
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:center;gap:8px">
+          <div class="barcode" id="realQr" style="width:160px;height:160px" aria-hidden="true"></div>
+          <div class="small">Scan at gate</div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <button id="downloadReal">Download Pass PNG</button>
+        <button id="printReal" class="ghost small">Print</button>
+      </div>
+    </div>
+
+    <div class="small" style="margin-top:6px">Tip: use the download/print button to produce the duplicate physical pass for your demo.</div>
+  </div>
+</div>
+
+<script>
+  // state
+  const state = { name:'', ticket:'', seat:'', gate:'5' };
+
+  // elements
+  const verifyBtn = document.getElementById('verifyBtn');
+  const resetBtn = document.getElementById('resetBtn');
+  const status = document.getElementById('status');
+  const statusText = document.getElementById('statusText');
+  const seatBox = document.getElementById('seatBox');
+  const seatGrid = document.getElementById('seatGrid');
+  const generateBtn = document.getElementById('generateBtn');
+  const clearSeat = document.getElementById('clearSeat');
+  const miniPass = document.getElementById('miniPass');
+  const miniMeta = document.getElementById('miniMeta');
+  const miniQr = document.getElementById('miniQr');
+  const realPass = document.getElementById('realPass');
+  const realMeta = document.getElementById('realMeta');
+  const realQr = document.getElementById('realQr');
+  const downloadReal = document.getElementById('downloadReal');
+  const printReal = document.getElementById('printReal');
+  const gateEl = document.getElementById('gate');
+
+  gateEl.textContent = state.gate;
+
+  // seat generation
+  const taken = new Set(['1A','1B','3C']); // demo occupied
+  function buildSeats(){
+    seatGrid.innerHTML = '';
+    const rows = 6, cols = ['A','B','C','D','E','F'];
+    for(let r=1;r<=rows;r++){
+      for(const c of cols){
+        const id = r + c;
+        const d = document.createElement('div');
+        d.className = 'seat';
+        d.textContent = id;
+        d.setAttribute('role','button');
+        if(taken.has(id)){
+          d.classList.add('taken');
+          d.setAttribute('aria-disabled','true');
+        } else {
+          d.addEventListener('click', ()=>selectSeat(d,id));
+        }
+        seatGrid.appendChild(d);
+      }
+    }
+  }
+  buildSeats();
+
+  function selectSeat(el, id){
+    // clear previous
+    document.querySelectorAll('.seat.selected').forEach(s=>s.classList.remove('selected'));
+    el.classList.add('selected');
+    state.seat = id;
+    generateBtn.disabled = false;
+  }
+
+  // helper: format date into YYYY-MM-DD HH:MM
+  function fmtDate(d){
+    const pad = n => n.toString().padStart(2,'0');
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  // verify flow (single click, simulated delay)
+  verifyBtn.addEventListener('click', ()=>{
+    const ticketVal = document.getElementById('ticket').value.trim();
+    const nameVal = document.getElementById('name').value.trim();
+    if(!ticketVal || !nameVal){ alert('Enter Ticket Number and Name'); return; }
+
+    // update state
+    state.ticket = ticketVal; state.name = nameVal;
+    // clear UI immediately
+    state.seat = '';
+    generateBtn.disabled = true;
+    document.querySelectorAll('.seat.selected').forEach(s=>s.classList.remove('selected'));
+    miniPass.style.display = 'none';
+    realPass.style.display = 'none';
+    // show loader & disable
+    status.style.display = 'flex';
+    statusText.textContent = 'Verifying documents...';
+    verifyBtn.disabled = true;
+
+    // simulated verification (4s)
+    setTimeout(()=>{
+      statusText.textContent = 'Verified ✅';
+      setTimeout(()=>{
+        status.style.display = 'none';
+        seatBox.style.display = 'block';
+        verifyBtn.disabled = false;
+        seatBox.scrollIntoView({behavior:'smooth', block:'center'});
+      }, 600);
+    }, 4000);
+  });
+
+  // clear selection
+  clearSeat.addEventListener('click', ()=>{
+    state.seat = '';
+    document.querySelectorAll('.seat.selected').forEach(s=>s.classList.remove('selected'));
+    generateBtn.disabled = true;
+  });
+
+  // generate both passes
+  generateBtn.addEventListener('click', ()=>{
+    if(!state.seat){ alert('Select a seat first'); return; }
+
+    // timestamp boarding time 30 mins from now
+    const boarding = new Date(Date.now() + 30*60*1000);
+    const detailsText = `Name: ${state.name}\nTicket: ${state.ticket}\nSeat: ${state.seat}\nGate: ${state.gate}\nBoarding: ${fmtDate(boarding)}`;
+
+    // mini pass
+    miniMeta.textContent = detailsText;
+    miniQr.innerHTML = '';
+    try{
+      new QRCode(miniQr, { text: detailsText, width:120, height:120, correctLevel: QRCode.CorrectLevel.H });
+    }catch(e){
+      console.warn('QR error', e);
+    }
+    miniPass.style.display = 'flex';
+
+    // real pass
+    realMeta.innerHTML = `Passenger: <strong>${escapeHtml(state.name)}</strong><br>Ticket: <strong>${escapeHtml(state.ticket)}</strong><br>Seat: <strong>${escapeHtml(state.seat)}</strong><br>Gate: <strong>${escapeHtml(state.gate)}</strong><br>Boarding: <strong>${fmtDate(boarding)}</strong><br>Flight: <strong>SM123</strong>`;
+    realQr.innerHTML = '';
+    try{
+      new QRCode(realQr, { text: detailsText, width:160, height:160, correctLevel: QRCode.CorrectLevel.H });
+    }catch(e){
+      console.warn('QR error', e);
+    }
+    realPass.style.display = 'block';
+    // close any previously disabled generate
+    generateBtn.disabled = false;
+
+    // scroll to passes
+    realPass.scrollIntoView({behavior:'smooth', block:'center'});
+  });
+
+  // download the real pass as PNG (renders the card area)
+  downloadReal.addEventListener('click', ()=>{
+    // hide controls while rendering for a clean image
+    const controls = downloadReal.parentElement;
+    controls.style.visibility = 'hidden';
+
+    html2canvas(realPass, {scale:2, backgroundColor:'#ffffff'}).then(canvas=>{
+      const link = document.createElement('a');
+      const safeTicket = (state.ticket || 'demo').replace(/\s+/g,'_').replace(/[^a-zA-Z0-9_\-]/g,'');
+      link.download = `boarding_pass_${safeTicket}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    }).catch(err=>{
+      alert('Failed to create image: '+err);
+    }).finally(()=>controls.style.visibility = 'visible');
+  });
+
+  // print real pass
+  printReal.addEventListener('click', ()=>{
+    // clone the node so we don't lose anything in original page
+    const clone = realPass.cloneNode(true);
+
+    // inline minimal styles for printing
+    const style = `
+      <style>
+        body{font-family:monospace;padding:20px}
+        .paper{width:100%;border:1px solid #ddd;padding:12px;border-radius:6px}
+        .controls{display:none}
+      </style>
+    `;
+
+    const w = window.open('', '_blank');
+    if(!w){
+      alert('Please allow popups for this site to print.');
+      return;
+    }
+    w.document.open();
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Print Boarding Pass</title>${style}</head><body>`);
+    // append the cloned node's outerHTML
+    w.document.write(`<div class="paper">${clone.innerHTML}</div>`);
+    w.document.write('</body></html>');
+    w.document.close();
+
+    // small delay then print
+    setTimeout(()=>{ w.print(); }, 700);
+  });
+
+  // reset
+  resetBtn.addEventListener('click', ()=>{
+    document.getElementById('ticket').value = '';
+    document.getElementById('name').value = '';
+    state.name=''; state.ticket=''; state.seat='';
+    seatBox.style.display = 'none';
+    miniPass.style.display = 'none';
+    realPass.style.display = 'none';
+    document.querySelectorAll('.seat.selected').forEach(s=>s.classList.remove('selected'));
+    generateBtn.disabled = true;
+  });
+
+  // keyboard Enter shortcuts
+  ['ticket','name'].forEach(id=>{
+    document.getElementById(id).addEventListener('keydown', e=>{
+      if(e.key === 'Enter') verifyBtn.click();
+    });
+  });
+
+  // small helper to sanitize inserted values into HTML
+  function escapeHtml(unsafe) {
+    if(!unsafe) return '';
+    return unsafe.replace(/[&<"'>]/g, function(m) {
+      return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]);
+    });
+  }
+</script>
+</body>
+</html>
